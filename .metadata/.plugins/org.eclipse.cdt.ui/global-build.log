@@ -1,0 +1,32 @@
+14:31:05 **** Build of configuration Debug for project rodCUDA ****
+make all 
+Building file: ../src/add.cpp
+Invoking: NVCC Compiler
+/usr/local/cuda-8.0/bin/nvcc -G -g -O0 -gencode arch=compute_53,code=sm_53 -gencode arch=compute_60,code=sm_60  -odir "src" -M -o "src/add.d" "../src/add.cpp"
+/usr/local/cuda-8.0/bin/nvcc -G -g -O0 --compile  -x c++ -o  "src/add.o" "../src/add.cpp"
+nvcc warning : The 'compute_20', 'sm_20', and 'sm_21' architectures are deprecated, and may be removed in a future release (Use -Wno-deprecated-gpu-targets to suppress warning).
+Finished building: ../src/add.cpp
+ 
+Building target: rodCUDA
+Invoking: NVCC Linker
+/usr/local/cuda-8.0/bin/nvcc --cudart static --relocatable-device-code=false -gencode arch=compute_53,code=compute_53 -gencode arch=compute_60,code=compute_60 -gencode arch=compute_53,code=sm_53 -gencode arch=compute_60,code=sm_60 -link -o  "rodCUDA"  ./src/add.o   
+Finished building target: rodCUDA
+ 
+14:32:11 **** Incremental Build of configuration Debug for project rodCUDA ****
+make all 
+make: Nothing to be done for 'all'.
+14:32:21 **** Incremental Build of configuration Debug for project rodCUDA ****
+make all 
+make: Nothing to be done for 'all'.
+14:33:30 **** Incremental Build of configuration Debug for project rodCUDA ****
+make all 
+make: Nothing to be done for 'all'.
+14:33:32 **** Incremental Build of configuration Debug for project rodCUDA ****
+make all 
+make: Nothing to be done for 'all'.
+14:34:08 **** Incremental Build of configuration Debug for project rodCUDA ****
+make all 
+make: Nothing to be done for 'all'.
+14:36:28 **** Incremental Build of configuration Debug for project rodCUDA ****
+make all 
+make: Nothing to be done for 'all'.
