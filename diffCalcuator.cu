@@ -38,7 +38,7 @@ void calcF(int nAtoms, long nDiff,
   {
     double dotProduct = 0.0;
     double* thisAtomPos3D = (double*)((char*)atomPos3D + atomIndex * atomPos3Dpitch);
-    double* thisDiffPos3D = (double*)((char*)diffPos3D + diffIndex * atomPos3Dpitch);
+    double* thisDiffPos3D = (double*)((char*)diffPos3D + diffIndex * diffPos3Dpitch);
     for (int direction = 0; direction < 3; ++direction)
     {
       dotProduct += thisAtomPos3D[direction] * thisDiffPos3D[direction];
