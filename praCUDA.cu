@@ -1,12 +1,3 @@
-#include<stdio.h>
-#include <iostream>
-#include <math.h>
-
-// includes CUDA
-#include<cuda.h>
-#include <cuda_runtime.h>
-#include<device_launch_parameters.h>
-
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
@@ -24,7 +15,7 @@ void calcF(int nAtoms, long nDiff,
   double *atomOccu, int *atomType,
   double *atomPos3D0, double *atomPos3D1, double *atomPos3D2,
   double *atomDW3D0, double *atomDW3D1, double *atomDW3D2,
-  double *atomicF,
+  double *atomicF, size_t atomicFpitch,
   double *outFRe, double *outFIm)
 {
   long totalThreadsX = (blockDim.x * gridDim.x);
@@ -32,81 +23,43 @@ void calcF(int nAtoms, long nDiff,
   int calcManyX = ceil((double)nDiff / totalThreadsX);
   int calcManyY = ceil((double)nAtoms / totalThreadsY);
 
-  double pipi16 = (16. * M_PI * M_PI);
-
-  for (int threadRunY = 0; threadRunY < calcManyY; ++threadRunY)
+  for (int threadRunX = 0; threadRunX < calcManyX; ++threadRunX)
   {
-    long atomIndex = threadIdx.y + (blockDim.y * blockIdx.y) + threadRunY * totalThreadsY;
-
-    for (int threadRunX = 0; threadRunX < calcManyX; ++threadRunX)
+    for (int threadRunY = 0; threadRunY < calcManyY; ++threadRunY)
     {
       long diffIndex = threadIdx.x + (blockDim.x * blockIdx.x) + threadRunX * totalThreadsX;
-      
+      long atomIndex = threadIdx.y + (blockDim.y * blockIdx.y) + threadRunY * totalThreadsY;
+
       if (atomIndex < nAtoms && diffIndex < nDiff)
       {
-        // atomic form factor
-        double diffDot = 0.0;
-        diffDot += diffPos3D0[diffIndex] * diffPos3D0[diffIndex];
-        diffDot += diffPos3D1[diffIndex] * diffPos3D1[diffIndex];
-        diffDot += diffPos3D2[diffIndex] * diffPos3D2[diffIndex];
-        double atomicFExpFact = 0.0;
-        atomicFExpFact = diffDot / pipi16; // Lambda needs to be included here if diffPos3D is not in Q space!
-        double atomicFRe = 1.0;
-        for (uint index = 0; index < 4; ++index)
-        {
-          atomicFRe += (atomicF[atomType[atomIndex] * 9 + index] *
-               exp(-atomicF[atomType[atomIndex] * 9 + 4 + index] * atomicFExpFact));
-        }
-        atomicFRe += atomicF[atomType[atomIndex] * 9 + 9];
-
-        // debye-waller factors 
-        double debyWaller = 1.0;
-        if (atomDW3D0[atomIndex] < 0) { // if DW0 < 0 => inplane and out-of-plane
-          if (atomDW3D1[atomIndex] < 0) { // if DW1 < 0 and => iso
-            if (atomDW3D2[atomIndex] < 0) { // if DW2 < 0 no DW 
-              debyWaller = 1.0;
-            }
-            else { //  iso debye-waller
-              debyWaller *= exp(-atomDW3D0[atomIndex] * diffDot / pipi16);
-            }
-          }
-          else { //  inplane and out-of-plane debye-waller
-            debyWaller *= exp(-atomDW3D1[atomIndex] *
-                              (diffPos3D0[diffIndex] * diffPos3D0[diffIndex] +
-                               diffPos3D1[diffIndex] * diffPos3D1[diffIndex]) /
-                              pipi16);
-            debyWaller *= exp(-atomDW3D2[atomIndex] * diffPos3D2[diffIndex] *
-                              diffPos3D2[diffIndex] / pipi16);
-          }
-        } 
-        else { //  all direction debye-waller
-          debyWaller *= exp(-atomDW3D0[atomIndex] * diffPos3D0[diffIndex] *
-                            diffPos3D0[diffIndex] / pipi16);
-          debyWaller *= exp(-atomDW3D1[atomIndex] * diffPos3D1[diffIndex] *
-                            diffPos3D1[diffIndex] / pipi16);
-          debyWaller *= exp(-atomDW3D2[atomIndex] * diffPos3D2[diffIndex] *
-                            diffPos3D2[diffIndex] / pipi16);
-        }
-
-        // might be possible to speed up by summing up block wise and than sum blocks
         double dotProduct = 0.0;
+        double atomicFExpFact = 0.0;
+        double* thisAtomicF = (double*)(atomType[atomIndex] * atomicFpitch + (char*)atomicF);
         dotProduct += atomPos3D0[atomIndex] * diffPos3D0[diffIndex];
         dotProduct += atomPos3D1[atomIndex] * diffPos3D1[diffIndex];
         dotProduct += atomPos3D2[atomIndex] * diffPos3D2[diffIndex];
+        atomicFExpFact += diffPos3D0[diffIndex] * diffPos3D0[diffIndex];
+        atomicFExpFact += diffPos3D1[diffIndex] * diffPos3D1[diffIndex];
+        atomicFExpFact += diffPos3D2[diffIndex] * diffPos3D2[diffIndex];
+
+        // Lambda needs to be included here if diffPos3D is not in Q space!
+        atomicFExpFact = atomicFExpFact / (16. * M_PI * M_PI);
+        // not sure if & is needed
+        // might be possible to speed up by summing up block wise and than sum blocks
+        double atomicFRe = 1.0;
+        double atomicFIm = 0.0;
         // double* thisBaseFIm = (double*)((char*)baseFIm + diffIndex * baseFImpitch);
         // atomicAdd(&outFRe[diffIndex], (thisBaseFRe[atomType[atomIndex]] * atomOccu[atomIndex] * cos(dotProduct)) );
         double cosDot = cos(dotProduct);
         double sinDot = sin(dotProduct);
-        double resultFRe = atomOccu[atomIndex] * (atomicFRe * cosDot);
-        double resultFIm = atomOccu[atomIndex] * (atomicFRe * sinDot);
+        double resultFRe = atomOccu[atomIndex] *((atomicFRe * cosDot)+(atomicFIm * sinDot));
+        double resultFIm = atomOccu[atomIndex] *((atomicFRe * sinDot)+(atomicFIm * cosDot));
         atomicAdd(&outFRe[diffIndex], resultFRe );
         atomicAdd(&outFIm[diffIndex], resultFIm );
       }
     }
   }
 }
-
-
 
 int main(int argc, char** argv) 
 {
@@ -117,9 +70,6 @@ int main(int argc, char** argv)
   // determine compute structure
   int nTx = 64;
   int nTy = 8;
-  // int maxBlocks = 500000;
-  int maxBlocks = atol(argv[3]);;
-
   if (nDiff < nTx){
     nTx = nDiff;
   }
@@ -128,6 +78,7 @@ int main(int argc, char** argv)
   }
   int nBx = floor(nDiff / nTx);
   int nBy = floor(nAtoms / nTy);
+  int maxBlocks = 500000;
   if (nBx > maxBlocks) {
     nBx = maxBlocks;
   }
@@ -137,10 +88,10 @@ int main(int argc, char** argv)
   std::cout << "#Atoms: " << nAtoms << ", #Diffractions: " << nDiff << ", #AtomTypes: " << nAtomTypes << std::endl;
   std::cout << "Blocks: " << nBx << " x " << nBy << " Threads: " << nTx << " x " << nTy << std::endl;
   float memGuess = (nDiff*(3+4)*sizeof(double)+nAtoms*4*sizeof(double)+nAtoms*1*sizeof(int));
-  std::cout << "MemUsage: " << memGuess*1e-6 << " MB" << std::endl;
+  std::cout << "MemUsage: " << memGuess*1e-6 << "MB" << std::endl;
 
   // create GPU pointer
-  double  *atomicF = new double[nAtomTypes * 9];
+  double  *atomicF;
   int     *atomType = new int[nAtoms];
   double  *atomOccu = new double[nAtoms];
   double  *atomPos3D0 = new double[nAtoms];
@@ -156,8 +107,11 @@ int main(int argc, char** argv)
   double  *diffFstaticIm = new double[nDiff];
   double  *diffFunitRe = new double[nDiff];
   double  *diffFunitIm = new double[nDiff];
+  // create Host data structures
+  double  atomicFValues[nAtomTypes][9];
+  size_t  atomicFpitch;
   // alloc GPU mem
-  gpuErrchk(cudaMallocManaged(&atomicF, nAtomTypes*9*sizeof(double)));
+  gpuErrchk(cudaMallocPitch(&atomicF, &atomicFpitch, 9 * sizeof(double), nAtomTypes));
   gpuErrchk(cudaMallocManaged(&atomType, nAtoms*sizeof(int)));
   gpuErrchk(cudaMallocManaged(&atomOccu, nAtoms*sizeof(double)));
   gpuErrchk(cudaMallocManaged(&atomPos3D0, nAtoms*sizeof(double)));
@@ -176,17 +130,13 @@ int main(int argc, char** argv)
 
   // Generate some test data:
   std::cout << "Init data " << std::endl;
-  int newAtomType[] = {0, 1, 1, 0, 0, 1, 1, 0};
+  int newAtomType[] = {0,1,1,0,0,1,1,0};
   double newAtomOccu[] = {0.9, 1.0, 0.9, 1.0,
-                          0.9, 1.0, 0.9, 1.0};
-  double newAtomPos3D[8][3] = {{0.0,0.5,0.0}, {0.5,0.5,0.0},
-                               {0.0,0.0,0.0}, {0.5,0.0,0.0},
-                               {0.25,0.5,0.5},{0.75,0.5,0.5},
-                               {0.25,0.0,0.5},{0.75,0.0,0.5}};
-  double newAtomDW3D[8][3] = {{-1.0,0.0,0.0}, {-1.0,-20.0,-40.0},
-                              {-10.0,-20.0,0.0}, {0.0,0.0,-0.0},
-                              {0.0,0.0,0.0}, {0.0,0.0,0.0},
-                              {0.0,0.0,0.0}, {0.0,0.0,0.0}};
+                       0.9, 1.0, 0.9, 1.0};
+  double newAtomPos3D[8][3] = {{0.0,0.5,0.0},{0.5,0.5,0.0},
+                           {0.0,0.0,0.0},{0.5,0.0,0.0},
+                           {0.25,0.5,0.5},{0.75,0.5,0.5},
+                           {0.25,0.0,0.5},{0.75,0.0,0.5}};
   for (int index = 0; index < nAtoms; ++index)
   {
     atomType[index] = newAtomType[index];
@@ -194,9 +144,6 @@ int main(int argc, char** argv)
     atomPos3D0[index] = newAtomPos3D[index][0];
     atomPos3D1[index] = newAtomPos3D[index][1];
     atomPos3D2[index] = newAtomPos3D[index][2];
-    atomDW3D0[index] = newAtomDW3D[index][0];
-    atomDW3D1[index] = newAtomDW3D[index][1];
-    atomDW3D2[index] = newAtomDW3D[index][2];
   };
   for(int index = 0; index < nDiff; ++index)
   {
@@ -210,15 +157,18 @@ int main(int argc, char** argv)
     diffFunitIm[index] = 0.0;
   };
 
-  // Run 
+  // copy
+  std::cout << "Copy memory " << std::endl;
+  gpuErrchk(cudaMemcpy2D(atomicF, atomicFpitch, atomicFValues, 9*sizeof(double), 9*sizeof(double), nAtomTypes, cudaMemcpyHostToDevice));
+
   std::cout << "Start calcF " << std::endl;
-  calcF<<<numBlocks, threadsPerBlock>>>(
-    nAtoms, nDiff, 
+  // Run 
+  calcF<<<numBlocks, threadsPerBlock>>>(nAtoms, nDiff, 
     diffPos3D0, diffPos3D1, diffPos3D2,
     atomOccu, atomType,
     atomPos3D0, atomPos3D1, atomPos3D2,
     atomDW3D0, atomDW3D1, atomDW3D2,
-    atomicF,
+    atomicF, atomicFpitch,
     diffFunitRe, diffFunitIm);
 
   // Wait for GPU to finish before accessing on host
@@ -237,6 +187,9 @@ int main(int argc, char** argv)
     }
   }
   std::cout << std::endl;
+
+  // Free memory
+  cudaFree(atomicF);
   
   std::cout << "Fin " << std::endl;
   return 0;
