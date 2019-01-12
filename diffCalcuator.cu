@@ -7,6 +7,9 @@
 #include <cuda_runtime.h>
 #include<device_launch_parameters.h>
 
+#include<diffCalculator.cuh>
+
+// Functions
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
@@ -106,6 +109,140 @@ void calcF(int nAtoms, long nDiff,
   }
 }
 
+class DiffRun
+{
+  public:
+    long nAtoms; // along thread.y
+    long nDiff; // along thread.x
+    int nAtomTypes; // number of atomicF
+
+    double  *atomicF;
+    int     *atomType;
+    double  *atomOccu;
+    double  *atomPos3D0;
+    double  *atomPos3D1;
+    double  *atomPos3D2;
+    double  *atomDW3D0;
+    double  *atomDW3D1;
+    double  *atomDW3D2;
+    double  *diffPos3D0;
+    double  *diffPos3D1;
+    double  *diffPos3D2;
+    double  *diffFstaticRe;
+    double  *diffFstaticIm;
+    double  *diffFunitRe;
+    double  *diffFunitIm;
+
+    // DiffRunController *diffRunContollerParent;
+    bool finishedRun = false;
+    void run(void);
+
+    // determine compute structure
+    int nTx = 64;
+    int nTy = 8;
+    int maxBlocks = 500000;
+};
+void DiffRun::run(void){
+  if (nDiff < nTx){
+    nTx = nDiff;
+  }
+  if (nAtoms < nTy) { 
+    nTy = nAtoms;
+  }
+  int nBx = floor(nDiff / nTx);
+  int nBy = floor(nAtoms / nTy);
+  if (nBx > maxBlocks) {
+    nBx = maxBlocks;
+  }
+
+  std::cout << "#Atoms: " << nAtoms << ", #Diffractions: " << nDiff << ", #AtomTypes: " << nAtomTypes << std::endl;
+  std::cout << "Blocks: " << nBx << " x " << nBy << " Threads: " << nTx << " x " << nTy << std::endl;
+  float memGuess = (nDiff*(3+4)*sizeof(double)+nAtoms*4*sizeof(double)+nAtoms*1*sizeof(int));
+  std::cout << "MemUsage: " << memGuess*1e-6 << " MB" << std::endl;
+
+  dim3 threadsPerBlock(nTx, nTy);
+  dim3 numBlocks(nBx, nBy);
+
+  gpuErrchk(cudaMallocManaged(&atomicF, nAtomTypes*9*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&atomType, nAtoms*sizeof(int)));
+  gpuErrchk(cudaMallocManaged(&atomOccu, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&atomPos3D0, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&atomPos3D1, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&atomPos3D2, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&atomDW3D0, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&atomDW3D1, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&atomDW3D2, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&diffPos3D0, nDiff*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&diffPos3D1, nDiff*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&diffPos3D2, nDiff*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&diffFstaticRe, nDiff*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&diffFstaticIm, nDiff*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&diffFunitRe, nDiff*sizeof(double)));
+  gpuErrchk(cudaMallocManaged(&diffFunitIm, nDiff*sizeof(double)));
+
+  calcF<<<numBlocks, threadsPerBlock>>>(
+    nAtoms, nDiff, 
+    diffPos3D0, diffPos3D1, diffPos3D2,
+    atomOccu, atomType,
+    atomPos3D0, atomPos3D1, atomPos3D2,
+    atomDW3D0, atomDW3D1, atomDW3D2,
+    atomicF,
+    diffFunitRe, diffFunitIm);
+
+  // Wait for GPU to finish before accessing on host
+  gpuErrchk(cudaDeviceSynchronize());
+  finishedRun = true;
+};
+
+
+class DiffRunController 
+{
+  public:
+    sdt::vector<DiffRun*> diffRunsAll;
+    diffRun *diffRunCurrent;
+
+    // void setCurrentRun(DiffRun *diffRunSet);
+    // DiffRun* getCurrentRun(void);
+    int addRun(DiffRun *diffRunAdd);
+    DiffRunController(DiffRun* diffRunInit);
+    void runAll(void);
+
+};
+DiffRunController::DiffRunController(DiffRun* diffRunInit) {
+  addRun(diffRunInit)
+} 
+int DiffRunController::addRun(DiffRun *diffRunAdd) {
+  setCurrentRun(diffRunAdd)
+  // diffRunAdd.diffRunContollerParent = this;
+  diffRunsAll.push_back(diffRunAdd);
+}
+// void DiffRunController::setCurrentRun(DiffRun *diffRunSet) {
+//   diffRunCurrent = diffRunSet;
+// }
+// DiffRun* DiffRunController::getCurrentRun(void) {
+//   return *diffRunCurrent;
+// }
+void DiffRunController::runAll(void) {
+   for (vector<DiffRun*>::iterator diffRunThis = diffRunsAll.begin();
+        diffRunThis != diffRunsAll.end(); ++diffRunThis) {
+    diffRunCurrent = diffRunThis;
+    diffRunCurrent.run();
+
+    // Test
+    float output = 0.0;
+    std::cout << std::fixed;
+    std::cout.precision(2);
+    for(int index = 0; index < 100; ++index)
+    {
+      output = (pow(diffRunCurrent.diffFunitRe[index], 2) + pow(diffRunCurrent.diffFunitIm[index], 2));
+      std::cout << output << " ";
+      if ((index+1) % 10 == 0) {
+        std::cout << std::endl;
+      }
+    }
+    std::cout << std::endl;
+   }
+}
 
 
 int main(int argc, char** argv) 
@@ -203,7 +340,6 @@ int main(int argc, char** argv)
     diffPos3D0[index] = floor((double)index / 10.);
     diffPos3D1[index] = ceil((double)index / 20.);
     diffPos3D2[index] = (0.1 * (index % 10));
-
     diffFstaticRe[index] = 0.0;
     diffFstaticIm[index] = 0.0;
     diffFunitRe[index] = 0.0;
