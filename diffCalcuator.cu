@@ -101,6 +101,7 @@ void calcF(int nAtoms, long nDiff,
         double sinDot = sin(dotProduct);
         double resultFRe = atomOccu[atomIndex] * (atomicFRe * cosDot);
         double resultFIm = atomOccu[atomIndex] * (atomicFRe * sinDot);
+
         atomicAdd(&outFRe[diffIndex], resultFRe );
         atomicAdd(&outFIm[diffIndex], resultFIm );
       }
@@ -142,7 +143,10 @@ class DiffRun
     int maxBlocks = 500000;
 };
 void DiffRun::run(void){
-  if (nDiff < nTx){
+  if (finishedRun) {
+    std::cout << "Run already!! atomsPos3D0[1]: " << atomPos3D0[1] << std::endl;
+  }
+  if (nDiff < nTx) {
     nTx = nDiff;
   }
   if (nAtoms < nTy) { 
@@ -157,39 +161,99 @@ void DiffRun::run(void){
   std::cout << "Blocks: " << nBx << " x " << nBy << " Threads: " << nTx << " x " << nTy << std::endl;
   float memGuess = (nDiff*(3+4)*sizeof(double)+nAtoms*4*sizeof(double)+nAtoms*1*sizeof(int));
   std::cout << "MemUsage: " << memGuess*1e-6 << " MB" << std::endl;
+  std::cout << "PreGPU atomsPos3D0[1]: " << atomPos3D0[1] << " @ " << &atomPos3D0 << " @ " << &atomPos3D0[1] << std::endl;
+  std::cout << "PreGPU atomicF[1]: " << atomicF[1] << std::endl;
 
   dim3 threadsPerBlock(nTx, nTy);
   dim3 numBlocks(nBx, nBy);
 
-  gpuErrchk(cudaMallocManaged(&atomicF, nAtomTypes*9*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&atomType, nAtoms*sizeof(int)));
-  gpuErrchk(cudaMallocManaged(&atomOccu, nAtoms*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&atomPos3D0, nAtoms*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&atomPos3D1, nAtoms*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&atomPos3D2, nAtoms*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&atomDW3D0, nAtoms*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&atomDW3D1, nAtoms*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&atomDW3D2, nAtoms*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&diffPos3D0, nDiff*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&diffPos3D1, nDiff*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&diffPos3D2, nDiff*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&diffFstaticRe, nDiff*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&diffFstaticIm, nDiff*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&diffFunitRe, nDiff*sizeof(double)));
-  gpuErrchk(cudaMallocManaged(&diffFunitIm, nDiff*sizeof(double)));
+ // Init device memory
+
+  double  *atomicFDevice;
+  int     *atomTypeDevice;
+  double  *atomOccuDevice;
+  double  *atomPos3D0Device;
+  double  *atomPos3D1Device;
+  double  *atomPos3D2Device;
+  double  *atomDW3D0Device;
+  double  *atomDW3D1Device;
+  double  *atomDW3D2Device;
+  double  *diffPos3D0Device;
+  double  *diffPos3D1Device;
+  double  *diffPos3D2Device;
+  double  *diffFstaticReDevice;
+  double  *diffFstaticImDevice;
+  double  *diffFunitReDevice;
+  double  *diffFunitImDevice;
+
+  gpuErrchk(cudaMalloc(&atomicFDevice, nAtomTypes*9*sizeof(double)));
+  gpuErrchk(cudaMalloc(&atomTypeDevice, nAtoms*sizeof(int)));
+  gpuErrchk(cudaMalloc(&atomOccuDevice, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMalloc(&atomPos3D0Device, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMalloc(&atomPos3D1Device, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMalloc(&atomPos3D2Device, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMalloc(&atomDW3D0Device, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMalloc(&atomDW3D1Device, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMalloc(&atomDW3D2Device, nAtoms*sizeof(double)));
+  gpuErrchk(cudaMalloc(&diffPos3D0Device, nDiff*sizeof(double)));
+  gpuErrchk(cudaMalloc(&diffPos3D1Device, nDiff*sizeof(double)));
+  gpuErrchk(cudaMalloc(&diffPos3D2Device, nDiff*sizeof(double)));
+  gpuErrchk(cudaMalloc(&diffFstaticReDevice, nDiff*sizeof(double)));
+  gpuErrchk(cudaMalloc(&diffFstaticImDevice, nDiff*sizeof(double)));
+  gpuErrchk(cudaMalloc(&diffFunitReDevice, nDiff*sizeof(double)));
+  gpuErrchk(cudaMalloc(&diffFunitImDevice, nDiff*sizeof(double)));
+
+  gpuErrchk(cudaMemcpy(atomicFDevice, atomicF, nAtomTypes*9*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomTypeDevice, atomType, nAtoms*sizeof(int), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomOccuDevice, atomOccu, nAtoms*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomPos3D0Device, atomPos3D0, nAtoms*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomPos3D1Device, atomPos3D1, nAtoms*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomPos3D2Device, atomPos3D2, nAtoms*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomDW3D0Device, atomDW3D0, nAtoms*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomDW3D1Device, atomDW3D1, nAtoms*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(atomDW3D2Device, atomDW3D2, nAtoms*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(diffPos3D0Device, diffPos3D0, nDiff*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(diffPos3D1Device, diffPos3D1, nDiff*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(diffPos3D2Device, diffPos3D2, nDiff*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(diffFstaticReDevice, diffFstaticRe, nDiff*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(diffFstaticImDevice, diffFstaticIm, nDiff*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(diffFunitReDevice, diffFunitRe, nDiff*sizeof(double), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(diffFunitImDevice, diffFunitIm, nDiff*sizeof(double), cudaMemcpyHostToDevice));
 
   calcF<<<numBlocks, threadsPerBlock>>>(
     nAtoms, nDiff, 
-    diffPos3D0, diffPos3D1, diffPos3D2,
-    atomOccu, atomType,
-    atomPos3D0, atomPos3D1, atomPos3D2,
-    atomDW3D0, atomDW3D1, atomDW3D2,
-    atomicF,
-    diffFunitRe, diffFunitIm);
+    diffPos3D0Device, diffPos3D1Device, diffPos3D2Device,
+    atomOccuDevice, atomTypeDevice,
+    atomPos3D0Device, atomPos3D1Device, atomPos3D2Device,
+    atomDW3D0Device, atomDW3D1Device, atomDW3D2Device,
+    atomicFDevice,
+    diffFunitReDevice, diffFunitImDevice);
 
   // Wait for GPU to finish before accessing on host
   gpuErrchk(cudaDeviceSynchronize());
+
+  gpuErrchk(cudaMemcpy(diffFunitRe, diffFunitReDevice, nDiff*sizeof(double), cudaMemcpyDeviceToHost));
+  gpuErrchk(cudaMemcpy(diffFunitIm, diffFunitImDevice, nDiff*sizeof(double), cudaMemcpyDeviceToHost));
+
+  gpuErrchk(cudaFree(atomicFDevice));
+  gpuErrchk(cudaFree(atomTypeDevice));
+  gpuErrchk(cudaFree(atomOccuDevice));
+  gpuErrchk(cudaFree(atomPos3D0Device));
+  gpuErrchk(cudaFree(atomPos3D1Device));
+  gpuErrchk(cudaFree(atomPos3D2Device));
+  gpuErrchk(cudaFree(atomDW3D0Device));
+  gpuErrchk(cudaFree(atomDW3D1Device));
+  gpuErrchk(cudaFree(atomDW3D2Device));
+  gpuErrchk(cudaFree(diffPos3D0Device));
+  gpuErrchk(cudaFree(diffPos3D1Device));
+  gpuErrchk(cudaFree(diffPos3D2Device));
+  gpuErrchk(cudaFree(diffFstaticReDevice));
+  gpuErrchk(cudaFree(diffFstaticImDevice));
+  gpuErrchk(cudaFree(diffFunitReDevice));
+  gpuErrchk(cudaFree(diffFunitImDevice));
+
   finishedRun = true;
+  std::cout << "PostGPU atomsPos3D0[1]: " << atomPos3D0[1] << " @ " << &atomPos3D0 << " @ " << &atomPos3D0[1] << std::endl;
 };
 
 
@@ -207,13 +271,13 @@ DiffRunController::DiffRunController(DiffRun* diffRunInit) {
   addRun(diffRunInit);
 }
 void DiffRunController::addRun(DiffRun* diffRunAdd) {
-  diffRunAdd = diffRunAdd;
+  diffRunCurrent = diffRunAdd;
   diffRunsAll.push_back(diffRunAdd);
 }
 void DiffRunController::runAll(void) {
-  for (std::vector<DiffRun*>::iterator diffRunThis = diffRunsAll.begin();
-      diffRunThis != diffRunsAll.end(); ++diffRunThis) {
-    diffRunCurrent = *diffRunThis;
+  for (int index = 1; index < diffRunsAll.size(); ++index) {
+    diffRunCurrent = diffRunsAll[index];
+    std::cout << "Run: " << index << std::endl;
     diffRunCurrent->run();
 
     // Test
@@ -270,6 +334,9 @@ int main(int argc, char** argv)
                               {-10.0,-20.0,0.0}, {0.0,0.0,-0.0},
                               {0.0,0.0,0.0}, {0.0,0.0,0.0},
                               {0.0,0.0,0.0}, {0.0,0.0,0.0}};
+  double newAtomicF[3][9] = {{1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0},
+                             {1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0},
+                             {1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0}};
   for (int index = 0; index < nAtoms; ++index)
   {
     atomType[index] = newAtomType[index];
@@ -280,6 +347,13 @@ int main(int argc, char** argv)
     atomDW3D0[index] = newAtomDW3D[index][0];
     atomDW3D1[index] = newAtomDW3D[index][1];
     atomDW3D2[index] = newAtomDW3D[index][2];
+  };
+  for (int indexAType = 0; indexAType < nAtomTypes; ++indexAType)
+  {
+    for(int index = 0; index < 9; ++index)
+    {
+      atomicF[indexAType * 9+index] = newAtomicF[indexAType][index];
+    };
   };
   for(int index = 0; index < nDiff; ++index)
   {
@@ -316,28 +390,33 @@ int main(int argc, char** argv)
   diffRunFirst->diffFunitRe = diffFunitRe;
   diffRunFirst->diffFunitIm = diffFunitIm;
 
+  DiffRun* diffRunSecond =  new DiffRun();
+  diffRunSecond->nAtoms = 7;
+  diffRunSecond->nDiff = 1000;
+  diffRunSecond->nAtomTypes = nAtomTypes;
+  diffRunSecond->atomicF = atomicF;
+  diffRunSecond->atomType = atomType;
+  diffRunSecond->atomOccu = atomOccu;
+  diffRunSecond->atomPos3D0 = atomPos3D0;
+  diffRunSecond->atomPos3D1 = atomPos3D1;
+  diffRunSecond->atomPos3D2 = atomPos3D2;
+  diffRunSecond->atomDW3D0 = atomDW3D0;
+  diffRunSecond->atomDW3D1 = atomDW3D1;
+  diffRunSecond->atomDW3D2 = atomDW3D2;
+  diffRunSecond->diffPos3D0 = diffPos3D0;
+  diffRunSecond->diffPos3D1 = diffPos3D1;
+  diffRunSecond->diffPos3D2 = diffPos3D2;
+  diffRunSecond->diffFstaticRe = diffFstaticRe;
+  diffRunSecond->diffFstaticIm = diffFstaticIm;
+  diffRunSecond->diffFunitRe = diffFunitRe;
+  diffRunSecond->diffFunitIm = diffFunitIm;
 
   DiffRunController* diffRunController =  new DiffRunController(diffRunFirst);
   diffRunController->addRun(diffRunFirst);
+  diffRunController->addRun(diffRunSecond);
 
   std::cout << "Start calcF " << std::endl;
   diffRunController->runAll();
-
-
-  // // Test
-  // DiffRun* diffRunCurrent = diffRunController->diffRunCurrent;
-  // float output = 0.0;
-  // std::cout << std::fixed;
-  // std::cout.precision(2);
-  // for(int index = 0; index < 100; ++index)
-  // {
-  //   output = (pow(diffRunCurrent->diffFunitRe[index], 2) + pow(diffRunCurrent->diffFunitIm[index], 2));
-  //   std::cout << output << " ";
-  //   if ((index+1) % 10 == 0) {
-  //     std::cout << std::endl;
-  //   }
-  // }
-  // std::cout << std::endl;
   
   std::cout << "Fin " << std::endl;
   return 0;
